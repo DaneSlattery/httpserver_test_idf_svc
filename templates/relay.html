@@ -1,0 +1,16 @@
+<h1>Relay Configuration</h1>
+<p>Relay State <span>{{ state }}</span></p>
+<h2>Relay Settings</h2>
+<button>Open</button>
+<button>Close</button>
+<p>Current Relay Control Source: <span>{{ ctrl_source }}</span></p>
+<form id="relay-ctrl" hx-post="/save_relay" hx-swap="none">
+    <label for="ctrl-source">Control Source</label>
+    <select name="ctrl-source" id="ctrl-source">
+        <option value="volvo">Volvo</option>
+        <option value="saab">Saab</option>
+        <option value="mercedes">Mercedes</option>
+        <option value="audi">Audi</option>
+    </select><br>
+    <button type="submit">Save</button>
+</form>

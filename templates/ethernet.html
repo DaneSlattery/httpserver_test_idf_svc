@@ -1,0 +1,20 @@
+<h1>Ethernet Configuration</h1>
+<p>Ethernet Status <span>{{ status }}</span></p>
+<h2>IP V4 Settings</h2>
+
+<p>Current IP Settings: <span>{{ ip_settings }}</span></p>
+<form id="ethernet-form" hx-post="/save_ethernet" hx-swap="none">
+    <label for="enabled">Enabled:</label>
+    <input type="checkbox" id="enabled" name="enabled" value="true"><br>
+    <label for="dhcp">DHCP:</label>
+    <input type="checkbox" id="dhcp" name="dhcp" value="true"><br>
+    <div id="static-ip-settings">
+        <label for="static_ip">IP:</label>
+        <input type="text" id="static_ip" name="static_ip"><br>
+        <label for="gateway">Gateway:</label>
+        <input type="text" id="gateway" name="gateway"><br>
+        <label for="subnet">Subnet:</label>
+        <input type="text" id="subnet" name="subnet"><br>
+    </div>
+    <button type="submit">Save</button>
+</form>

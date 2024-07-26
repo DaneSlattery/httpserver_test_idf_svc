@@ -1,0 +1,226 @@
+// esp native approach.
+
+use embedded_svc::http::Headers;
+use esp_idf_svc::handle::RawHandle;
+use std::{
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
+
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    hal::prelude::Peripherals,
+    http::{
+        server::{EspHttpConnection, EspHttpServer, Request},
+        Method,
+    },
+    io::Write,
+    nvs::EspDefaultNvsPartition,
+    wifi::{AuthMethod, BlockingWifi, ClientConfiguration, EspWifi},
+};
+
+use esp_idf_svc::mdns;
+
+use log::info;
+use minijinja::{context, Environment};
+use once_cell::sync::Lazy;
+
+const INDEX_HTML: &str = include_str!("../static/index.html");
+const SSID: &str = env!("WIFI_SSID");
+const PASSWORD: &str = env!("WIFI_PASS");
+
+// const MAX_LEN: usize = 128;
+
+const STACK_SIZE: usize = 10240;
+
+// const CHANNEL: u8 = 11;
+
+static HTTP_ENV: Lazy<Mutex<Environment>> = Lazy::new(|| {
+    let mut env = Environment::new();
+
+    //
+    env.add_template("status.html", include_str!("../templates/status.html"))
+        .unwrap();
+
+    env.add_template("wifi.html", include_str!("../templates/wifi.html"))
+        .unwrap();
+
+    Mutex::new(env)
+});
+
+static START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
+
+fn main() -> Result<(), anyhow::Error> {
+    // It is necessary to call this function once. Otherwise some patches to the runtime
+    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
+    esp_idf_svc::sys::link_patches();
+
+    // Bind the log crate to the ESP Logging facilities
+    esp_idf_svc::log::EspLogger::initialize_default();
+
+    let mut start_time = START_TIME.lock().unwrap();
+    *start_time = Some(std::time::SystemTime::now());
+
+    let peripherals = Peripherals::take()?;
+
+    let sys_loop = EspSystemEventLoop::take()?;
+
+    let nvs = EspDefaultNvsPartition::take()?;
+
+    let mut wifi = BlockingWifi::wrap(
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
+        sys_loop,
+    )?;
+
+    connect_wifi(&mut wifi)?;
+
+    let mut server = create_server()?;
+
+    server.fn_handler(
+        "/",
+        Method::Get,
+        |mut req: Request<&mut EspHttpConnection>| {
+            // let c = req.conn
+            let c = <Request<&mut EspHttpConnection>>::connection(&mut req);
+            let b = c.raw_connection()?;
+            // b.
+            let handle = c.handle();
+            let handle = unsafe { handle.read().sess_ctx };
+            println!("Handle: {:?}", handle);
+            // let (a, b) = req.split();
+            // let c = a.raw_connection().unwrap();
+            req.into_ok_response()?.write_all(INDEX_HTML.as_bytes())
+        },
+    )?;
+
+    server.fn_handler("/status", Method::Get, get_status)?;
+
+    let wifi_threads = Arc::new(Mutex::new(wifi));
+    server.fn_handler("/wifi", Method::Get, move |req| {
+        // let mut wifi = wifi;
+        get_wifi(req, &mut wifi_threads.lock().unwrap())
+    })?;
+
+    log::info!("Hello, world!, start time is = {:?}", start_time);
+    // Keep server running beyond when main() returns (forever)
+    // Do not call this if you ever want to stop or access it later.
+    // Otherwise you can either add an infinite loop so the main task
+    // never returns, or you can move it to another thread.
+    // https://doc.rust-lang.org/stable/core/mem/fn.forget.html
+    // core::mem::forget(wifi_threads);
+    core::mem::forget(server);
+
+    // loop {}
+    Ok(())
+}
+
+fn get_status(req: Request<&mut EspHttpConnection<'_>>) -> Result<(), anyhow::Error> {
+    let start_time = START_TIME.lock().unwrap();
+    let time = std::time::SystemTime::now();
+    let uptime = time.duration_since(start_time.unwrap())?;
+
+    req.content_len();
+    req.into_ok_response()?.write_all(
+        HTTP_ENV
+            .lock()
+            .unwrap()
+            .get_template("status.html")?
+            .render(context! {
+                serial_num=>"R52-112-K6Z",
+                current_time=>time,
+                uptime=> uptime,
+                temperature=> "15.6"
+            })?
+            .as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn get_wifi(
+    req: Request<&mut EspHttpConnection<'_>>,
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+) -> Result<(), anyhow::Error> {
+    // let start_time = START_TIME.lock().unwrap();
+    // let time = std::time::SystemTime::now();
+    // let uptime = time.duration_since(start_time.unwrap())?;
+    let status = if wifi.is_connected()? {
+        "Connected"
+    } else {
+        "Disconnected"
+    };
+
+    let current_ssid = match wifi.get_configuration() {
+        Ok(x) => match x {
+            esp_idf_svc::wifi::Configuration::AccessPoint(x) => {
+                format!("Access Point [{}]", x.ssid)
+            }
+            esp_idf_svc::wifi::Configuration::Client(x) => format!("Client [{}]", x.ssid),
+            esp_idf_svc::wifi::Configuration::Mixed(x, y) => {
+                format!("Mixed AP = [{}] Client = [{}]", y.ssid, x.ssid)
+            }
+            esp_idf_svc::wifi::Configuration::None => "No SSID".to_string(),
+        },
+        Err(x) => "Could not get configuration".to_string(),
+    };
+    // req.content_len();
+    req.into_ok_response()?.write_all(
+        HTTP_ENV
+            .lock()
+            .unwrap()
+            .get_template("wifi.html")?
+            .render(context! {status=>status,
+            ssid=>current_ssid, })?
+            .as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>) -> anyhow::Result<()> {
+    let wifi_configuration = esp_idf_svc::wifi::Configuration::Client(ClientConfiguration {
+        ssid: SSID.try_into().unwrap(),
+        bssid: None,
+        auth_method: AuthMethod::WPA2Personal,
+        password: PASSWORD.try_into().unwrap(),
+        channel: None,
+        ..Default::default()
+    });
+
+    wifi.set_configuration(&wifi_configuration)?;
+
+    wifi.start()?;
+    wifi.connect()?;
+
+    wifi.wait_netif_up()?;
+    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+    let hostname = wifi.wifi().sta_netif().get_hostname()?;
+    info!(
+        "Created Wifi with SSID {}. Network Info: {:?},\n hostname: {}",
+        SSID, ip_info, hostname
+    );
+    Ok(())
+}
+
+fn create_server() -> Result<EspHttpServer<'static>, anyhow::Error> {
+    //
+
+    // amazingly, this works.
+    let mut mdns = mdns::EspMdns::take()?;
+    mdns.set_hostname("espressif-cust")?;
+
+    // mdns.add_service(Some("_local"), "_http", "_tcp", 80, &[])?;
+
+    let server_config = esp_idf_svc::http::server::Configuration {
+        stack_size: STACK_SIZE,
+        ..Default::default()
+    };
+
+    // Keep wifi running beyond when this function returns (forever)
+    // Do not call this if you ever want to stop or access it later.
+    // Otherwise it should be returned from this function and kept somewhere
+    // so it does not go out of scope.
+    // https://doc.rust-lang.org/stable/core/mem/fn.forget.html
+    // core::mem::forget(wifi);
+    core::mem::forget(mdns);
+
+    Ok(EspHttpServer::new(&server_config)?)
+}

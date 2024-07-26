@@ -1,0 +1,24 @@
+<h1>WiFi Configuration</h1>
+<p>WiFi Status <span>{{ status }}</span></p>
+<h2>WiFi Settings</h2>
+<p>Current SSID: <span>{{ ssid }}</span></p>
+<form id="wifi-form-settings" hx-post="/save_wifi" hx-swap="none">
+    <label for="enabled">WiFi Enabled:</label>
+    <input type="checkbox" id="enabled" name="enabled" value="true"><br>
+    <label for="ssid">SSID:</label>
+    <input type="text" id="ssid" name="ssid"><br>
+    <label for="password">Password:</label>
+    <input type="password" id="password" name="password"><br>
+    <button type="submit">Save</button>
+</form>
+<h2>IP V4 Settings</h2>
+<form id="wifi-form" hx-post="/save_wifi_ip" hx-swap="none">
+    <label for="dhcp">DHCP:</label>
+    <input type="checkbox" id="dhcp" name="dhcp" value="true"><br>
+    <label for="static_ip">Static IP:</label>
+    <input type="text" id="static_ip" name="static_ip" minlength="7" maxlength="15" size="15"
+        pattern="^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"><br>
+    <label for="gateway">Gateway Address:</label>
+    <input type="text" id="gateway" name="gateway"><br>
+    <button type="submit">Save</button>
+</form>
